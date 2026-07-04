@@ -89,8 +89,8 @@ SHOCK_TEMPLATES = [
 
 
 def stochastic_layer(graph: nx.DiGraph, temporal_state: str, spatial_state: str, chaos_level: float) -> dict:
-    """Sample plausible uncertain shocks deterministically, with optional LLM explanation."""
-    rng = random.Random(hash((round(chaos_level, 2), graph.number_of_nodes(), temporal_state, spatial_state)))
+    """Sample truly random shocks, letting the LLM reshape type/target/explanation."""
+    rng = random.Random()
 
     trigger_probability = 0.25 + 0.65 * chaos_level
     if rng.random() > trigger_probability:
@@ -122,15 +122,28 @@ def stochastic_layer(graph: nx.DiGraph, temporal_state: str, spatial_state: str,
         "explanation": base_explanation,
     }
 
+    candidate_names = {attrs["name"]: node_id for node_id, attrs in top_pool}
+    valid_shock_types = [name for name, _, _ in SHOCK_TEMPLATES]
     user_prompt = (
         f"Temporal state:\n{temporal_state}\n\nSpatial state:\n{spatial_state}\n\n"
         f"Chaos level: {chaos_level}\n"
-        f"Deterministically sampled shock (keep type/target/probability/severity, improve explanation):\n"
-        f"{json.dumps(shock)}"
+        f"Randomly sampled shock (you may change shock_type and target_node to more plausible ones):\n"
+        f"{json.dumps(shock)}\n"
+        f"Allowed shock_type values: {json.dumps(valid_shock_types)}\n"
+        f"Allowed target_node values: {json.dumps(list(candidate_names))}"
     )
-    llm_text = call_llm(STOCHASTIC_LAYER_PROMPT, user_prompt)
+    llm_text = call_llm(STOCHASTIC_LAYER_PROMPT, user_prompt, temperature=0.5 + 0.5 * chaos_level)
     try:
         parsed = json.loads(llm_text[llm_text.index("{") : llm_text.rindex("}") + 1])
+        if parsed.get("shock_type") in valid_shock_types:
+            shock["shock_type"] = parsed["shock_type"]
+        if parsed.get("target_node") in candidate_names:
+            shock["target_node"] = parsed["target_node"]
+            shock["target_node_id"] = candidate_names[parsed["target_node"]]
+        for key in ("probability", "severity"):
+            value = parsed.get(key)
+            if isinstance(value, (int, float)):
+                shock[key] = round(min(1.0, max(0.0, float(value))), 2)
         if isinstance(parsed.get("explanation"), str) and parsed["explanation"]:
             shock["explanation"] = parsed["explanation"]
     except (ValueError, KeyError):

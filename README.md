@@ -12,7 +12,7 @@ Dreamer-style world models learn a latent state and roll it forward with a recur
 - **RSSM-inspired core** (3 layers): temporal reasoning (what changed?), spatial reasoning (how do effects propagate through edges?), stochastic reasoning (what uncertain shock could hit next?)
 - **Decoder**: turns the latent state into next-step node features, new events, and a human-readable butterfly-effect narrative
 
-The key idea: **the LLM is not the simulator**. The graph and deterministic numeric transition rules are the simulator. The LLM explains and compresses the evolving world state.
+The simulation is **LLM-powered and stochastic**: numeric transition rules provide grounding, but the LLM steers the outcome — it decides which stochastic shocks fire (chosen from truly random candidate samples) and applies bounded feature adjustments on top of numeric propagation. Every run is different.
 
 ## Why a graph?
 
@@ -22,25 +22,24 @@ Butterfly effects need structure to travel through. Locations are nodes with cli
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env      # mock mode works with no API keys
+cp .env.example .env      # add GOOGLE_API_KEY at deployment; falls back to mock offline
 python seed_data.py       # creates data/chaos_weather.db with 30 BC nodes
 streamlit run app.py
 ```
 
 Then pick a scenario (e.g. **Rainfall Cascade**), set the chaos slider, and click **Run Simulation**.
 
-## Mock Mode
+## LLM Configuration
 
-Set in `.env`:
+The app auto-detects a provider from the API keys present in the environment (checked in order): `GOOGLE_API_KEY`/`GEMINI_API_KEY` (Gemini, the primary provider), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`. Override with `LLM_PROVIDER` and `LLM_MODEL` if needed.
 
-```text
-MOCK_LLM=true
-LLM_PROVIDER=mock
-```
+With a live LLM:
 
-In mock mode, all LLM layers return deterministic canned responses, so the full demo works offline with no API key. The numeric simulation (event deltas, edge propagation, clamping) is always real and deterministic.
+- the **stochastic layer** samples random shock candidates each timestep and lets the LLM pick/reshape the shock (type, target, probability, severity) within validated bounds
+- the **adjustment layer** lets the LLM nudge node features after numeric propagation, clamped per-feature so it can't break the simulation
+- shocks and adjustments use an unseeded RNG, so **no two runs are identical**
 
-To use a real LLM, set `MOCK_LLM=false`, `LLM_PROVIDER=openai|anthropic|openrouter`, and the matching API key. If a call fails, the client automatically falls back to mock responses.
+If no key is set (or a call fails), the client falls back to mock responses so the demo still works offline — shocks and mock adjustments remain random. Set `MOCK_LLM=true` to force offline mode.
 
 ## Demo Script
 

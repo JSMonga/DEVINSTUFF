@@ -226,6 +226,52 @@ def apply_events_and_propagate(graph: nx.DiGraph, events: list[dict]) -> tuple[l
     return list(next_features.values()), flat_log
 
 
+ADJUSTMENT_LIMITS = {
+    "temperature_c": 2.0,
+    "rainfall_mm": 5.0,
+    "humidity_pct": 5.0,
+    "wind_speed_kmh": 8.0,
+    "pressure_hpa": 3.0,
+    "flood_risk": 0.1,
+    "wildfire_smoke_risk": 0.1,
+    "disruption_score": 8.0,
+    "mood_score": 8.0,
+}
+
+
+def apply_llm_adjustments(
+    graph: nx.DiGraph, next_features: list[dict], adjustments: list[dict], chaos_level: float
+) -> dict:
+    """Apply bounded LLM-proposed feature deltas. Returns a log of applied nudges.
+
+    Each delta is clamped to +/- ADJUSTMENT_LIMITS[feature] * (0.5 + chaos_level)
+    so the LLM can steer the simulation without breaking it.
+    """
+    features_by_id = {f["node_id"]: f for f in next_features}
+    id_by_name = {attrs["name"]: node_id for node_id, attrs in graph.nodes(data=True)}
+    applied: dict[str, list[str]] = {}
+    scale = 0.5 + chaos_level
+    for adj in adjustments[:5]:
+        name = adj.get("node")
+        feature = adj.get("feature")
+        delta = adj.get("delta")
+        node_id = id_by_name.get(name)
+        limit = ADJUSTMENT_LIMITS.get(feature)
+        if node_id is None or limit is None or not isinstance(delta, (int, float)):
+            continue
+        target = features_by_id.get(node_id)
+        if target is None or target.get(feature) is None:
+            continue
+        bound = limit * scale
+        clamped = min(bound, max(-bound, float(delta)))
+        target[feature] = round(target[feature] + clamped, 2)
+        clamp_features(target)
+        applied.setdefault(name, []).append(
+            f"{feature} {clamped:+.2f} ({adj.get('reason', 'LLM adjustment')})"
+        )
+    return {name: "; ".join(entries) for name, entries in applied.items()}
+
+
 def top_changed_nodes(graph_before: nx.DiGraph, features_after: list[dict], n: int = 5) -> list[dict]:
     """Rank nodes by total normalized feature change."""
     scales = {

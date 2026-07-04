@@ -60,6 +60,7 @@ def run_simulation(initial_event: dict, start_timestep: int = 0, steps: int = 5,
                 "narrative": decoded["narrative"],
                 "top_changed_nodes": decoded["top_changed_nodes"],
                 "propagation_log": decoded["propagation_log"],
+                "adjustment_log": decoded["adjustment_log"],
             }
         )
         prev_latent = latent

@@ -17,10 +17,21 @@ Use edge types and weights. Explain which nodes are exposed, buffered, or amplif
 Do not invent edges that are not present."""
 
 STOCHASTIC_LAYER_PROMPT = """You are the stochastic uncertainty layer of a Dreamer-inspired world model.
-Given temporal and spatial dynamics, propose one plausible uncertain shock.
+Given temporal and spatial dynamics, decide the most plausible uncertain shock.
+You are given a randomly sampled candidate shock; you may keep it or change
+shock_type and target_node — but only to values from the provided allowed lists.
 Return strict JSON with shock_type, target_node, probability, severity, and explanation.
 Probability and severity must be between 0 and 1.
 The shock must be legal, safe, and related to weather/climate disruption."""
+
+ADJUSTMENT_LAYER_PROMPT = """You are the adjustment layer of a graph world model.
+After the numeric simulator has propagated events, you may apply small bounded
+corrections to node features to reflect dynamics the simple rules miss
+(microclimates, terrain, urban effects, momentum).
+Return strict JSON: {"adjustments": [{"node": <node name>, "feature": <feature name>,
+"delta": <signed number>, "reason": <short string>}]}.
+Use at most 5 adjustments. Deltas must be small nudges, not rewrites.
+Only use node names and feature names that appear in the provided data."""
 
 DECODER_PROMPT = """You are the decoder of a graph world model.
 Turn the latent state into a clear next-step forecast and butterfly-effect narrative.

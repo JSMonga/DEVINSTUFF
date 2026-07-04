@@ -1,7 +1,9 @@
 """Provider-agnostic LLM wrapper with deterministic mock mode."""
 
 import hashlib
+import json
 import os
+import random
 
 import requests
 from dotenv import load_dotenv
@@ -9,16 +11,46 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_MODELS = {
+    "gemini": "gemini-2.0-flash",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-3-5-haiku-latest",
     "openrouter": "openai/gpt-4o-mini",
 }
 
+_KEY_ENV_VARS = {
+    "gemini": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+    "openai": ("OPENAI_API_KEY",),
+    "anthropic": ("ANTHROPIC_API_KEY",),
+    "openrouter": ("OPENROUTER_API_KEY",),
+}
+
+
+def _first_env(*names: str) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return None
+
 
 def _provider() -> str:
-    if os.getenv("MOCK_LLM", "true").lower() in ("1", "true", "yes"):
+    if os.getenv("MOCK_LLM", "false").lower() in ("1", "true", "yes"):
         return "mock"
-    return os.getenv("LLM_PROVIDER", "mock").lower()
+    configured = os.getenv("LLM_PROVIDER", "").lower()
+    if configured in ("google",):
+        configured = "gemini"
+    if configured:
+        return configured
+    for provider, env_vars in _KEY_ENV_VARS.items():
+        if _first_env(*env_vars):
+            return provider
+    return "mock"
+
+
+def llm_is_live() -> bool:
+    """True when a real provider with an API key is active (not mock fallback)."""
+    provider = _provider()
+    return provider != "mock" and bool(_first_env(*_KEY_ENV_VARS.get(provider, ())))
 
 
 def _mock_response(system_prompt: str, user_prompt: str) -> str:
@@ -54,6 +86,19 @@ def _mock_response(system_prompt: str, user_prompt: str) -> str:
             '"probability": 0.2, "severity": 0.5, '
             '"explanation": "Falling pressure over the coastal cluster could trigger a brief squall."}'
         )
+    if "adjustment layer" in sp:
+        rng = random.Random()
+        features = ["disruption_score", "flood_risk", "wildfire_smoke_risk", "temperature_c", "mood_score"]
+        adjustments = [
+            {
+                "node": "__random__",
+                "feature": rng.choice(features),
+                "delta": round(rng.uniform(-1.0, 1.0), 2),
+                "reason": "Mock microvariation representing unresolved local dynamics.",
+            }
+            for _ in range(rng.randint(1, 3))
+        ]
+        return json.dumps({"adjustments": adjustments})
     if "decoder" in sp:
         return (
             "The initial disturbance nudged its node's features first, then leaked through the "
@@ -71,6 +116,21 @@ def call_llm(system_prompt: str, user_prompt: str, temperature: float = 0.4) -> 
     model = os.getenv("LLM_MODEL") or DEFAULT_MODELS.get(provider, "")
 
     try:
+        if provider == "gemini" and _first_env("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            api_key = _first_env("GOOGLE_API_KEY", "GEMINI_API_KEY")
+            resp = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                headers={"x-goog-api-key": api_key},
+                json={
+                    "system_instruction": {"parts": [{"text": system_prompt}]},
+                    "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                    "generationConfig": {"temperature": temperature},
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
         if provider == "openai" and os.getenv("OPENAI_API_KEY"):
             from openai import OpenAI
 

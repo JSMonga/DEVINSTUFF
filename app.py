@@ -11,6 +11,7 @@ import db
 import seed_data
 from demo_scenarios import EVENT_TYPES, SCENARIOS, get_scenario
 from graph_engine import load_graph
+from llm_client import llm_is_live
 from simulation import build_final_story, run_simulation
 
 st.set_page_config(page_title="Chaos Weather Dreamer", layout="wide")
@@ -95,6 +96,9 @@ def main():
 
     st.title("Chaos Weather Dreamer")
     st.caption("A Dreamer-inspired graph simulator for climate butterfly effects.")
+    st.caption(
+        "LLM mode: **live**" if llm_is_live() else "LLM mode: **mock fallback** (no API key detected)"
+    )
     st.warning(
         "This is a creative hackathon simulation, not an official weather forecast "
         "or emergency alert system."
@@ -185,6 +189,10 @@ def main():
                 st.write(res["spatial_state"])
                 st.markdown("**Stochastic shock**")
                 st.json(res["shock"])
+                if res.get("adjustment_log"):
+                    st.markdown("**LLM adjustment layer**")
+                    for node_name, entry in res["adjustment_log"].items():
+                        st.markdown(f"- **{node_name}**: {entry}")
                 st.markdown("**Decoder narrative**")
                 st.success(res["narrative"])
                 st.markdown("**Top 5 changed nodes**")
