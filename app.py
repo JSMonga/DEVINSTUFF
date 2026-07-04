@@ -13,6 +13,7 @@ from demo_scenarios import EVENT_TYPES, SCENARIOS, get_scenario
 from graph_engine import load_graph
 from llm_client import llm_is_live
 from simulation import build_final_story, run_simulation
+from storyboard import GLOSSARY, build_animation, plain_language_stage
 
 st.set_page_config(page_title="Chaos Weather Dreamer", layout="wide")
 
@@ -24,8 +25,13 @@ def ensure_db():
         seed_data.seed()
 
 
-def plot_graph(timestep: int, metric: str):
-    graph = load_graph(timestep)
+def plot_graph(timestep: int, metric: str, features: list | None = None):
+    graph = load_graph(0 if features is not None else timestep)
+    if features is not None:
+        by_id = {f["node_id"]: f for f in features}
+        for node_id, attrs in graph.nodes(data=True):
+            if node_id in by_id:
+                attrs.update({k: v for k, v in by_id[node_id].items() if k not in ("id", "node_id", "timestep")})
     edge_traces = []
     for source, target, attrs in graph.edges(data=True):
         s, t = graph.nodes[source], graph.nodes[target]
@@ -91,8 +97,65 @@ def plot_graph(timestep: int, metric: str):
     return fig
 
 
+def get_active_sim_id() -> int:
+    sims = db.list_simulations()
+    if not sims:
+        sim_id = db.create_simulation(db.next_simulation_name())
+        return sim_id
+    active = st.session_state.get("active_sim")
+    if active not in [s["sim_id"] for s in sims]:
+        active = sims[-1]["sim_id"]
+    return active
+
+
+def simulation_menu():
+    st.session_state.setdefault("menu_hidden", False)
+    if st.session_state["menu_hidden"]:
+        return
+    col_new, col_hide = st.columns(2)
+    with col_new:
+        if st.button("\u2795 New", use_container_width=True, help="Create a new simulation"):
+            st.session_state["active_sim"] = db.create_simulation(db.next_simulation_name())
+            st.rerun()
+    with col_hide:
+        if st.button("\u25c0 Hide", use_container_width=True, help="Hide the simulation menu"):
+            st.session_state["menu_hidden"] = True
+            st.rerun()
+
+    st.subheader("Simulations")
+    active = st.session_state["active_sim"]
+    for sim in db.list_simulations():
+        is_active = sim["sim_id"] == active
+        if st.button(
+            sim["name"],
+            key=f"sim_{sim['sim_id']}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            st.session_state["active_sim"] = sim["sim_id"]
+            st.rerun()
+
+    with st.expander("Rename simulation"):
+        current = db.get_simulation(active)
+        new_name = st.text_input("New name", value=current["name"] if current else "", key="rename_input")
+        if st.button("Rename", use_container_width=True):
+            if new_name.strip():
+                db.rename_simulation(active, new_name.strip())
+                st.rerun()
+    st.divider()
+
+
 def main():
     ensure_db()
+    db.ensure_simulations_table()
+    st.session_state["active_sim"] = get_active_sim_id()
+
+    if st.session_state.get("menu_hidden"):
+        _, right = st.columns([5, 1])
+        with right:
+            if st.button("\u2630 Show menu", use_container_width=True):
+                st.session_state["menu_hidden"] = False
+                st.rerun()
 
     st.title("Chaos Weather Dreamer")
     st.caption("A Dreamer-inspired graph simulator for climate butterfly effects.")
@@ -107,6 +170,7 @@ def main():
     node_names = [n["name"] for n in db.get_nodes()]
 
     with st.sidebar:
+        simulation_menu()
         st.header("Controls")
         scenario_name = st.selectbox("Scenario", ["Custom"] + [s["name"] for s in SCENARIOS])
         scenario = get_scenario(scenario_name)
@@ -128,10 +192,14 @@ def main():
 
         run_clicked = st.button("Run Simulation", type="primary", use_container_width=True)
         if st.button("Reset DB", use_container_width=True):
+            saved_sims = db.dump_simulations()
             seed_data.seed()
-            st.session_state.pop("results", None)
-            st.session_state.pop("initial_event", None)
-            st.success("Database reset and reseeded.")
+            db.restore_simulations(saved_sims)
+            st.success("Database reset and reseeded (saved simulations kept).")
+
+    active_sim_id = st.session_state["active_sim"]
+    sim = db.get_simulation(active_sim_id)
+    st.markdown(f"### \U0001f4c2 {sim['name']}" if sim else "")
 
     if run_clicked:
         db.clear_simulation_state()
@@ -149,27 +217,47 @@ def main():
         results = run_simulation(initial_event, steps=steps, chaos_level=chaos_level,
                                  progress_callback=on_progress)
         progress.progress(1.0, text="Done.")
-        st.session_state["results"] = results
-        st.session_state["initial_event"] = initial_event
+        features_by_t = {t: db.get_features(t) for t in range(steps + 1)}
+        db.save_simulation_run(active_sim_id, initial_event, chaos_level, steps, results, features_by_t)
+        sim = db.get_simulation(active_sim_id)
+
+    features_by_t = (sim or {}).get("features_by_timestep") or {}
 
     st.subheader("World Graph")
-    max_t = db.get_max_timestep()
+    max_t = max(features_by_t.keys()) if features_by_t else 0
     col1, col2 = st.columns([1, 1])
     with col1:
         metric = st.selectbox("Node color metric", METRICS, index=2)
     with col2:
         view_t = st.slider("View timestep", 0, max(1, max_t), min(max_t, 0)) if max_t > 0 else 0
-    st.plotly_chart(plot_graph(view_t, metric), use_container_width=True)
+    view_features = features_by_t.get(view_t)
+    st.plotly_chart(plot_graph(view_t, metric, features=view_features), use_container_width=True)
 
     with st.expander("Node feature table"):
-        feats = db.get_features(view_t)
+        feats = view_features if view_features is not None else db.get_features(view_t)
         if feats:
             df = pd.DataFrame(feats).drop(columns=["id"])
             names = {n["node_id"]: n["name"] for n in db.get_nodes()}
             df.insert(0, "name", df["node_id"].map(names))
             st.dataframe(df, use_container_width=True, height=300)
 
-    results = st.session_state.get("results")
+    results = (sim or {}).get("results")
+    if results and features_by_t:
+        st.subheader("Story Mode \u2014 watch it unfold")
+        st.caption(
+            "Press \u25b6 Play to watch the whole event chain develop chronologically \u2014 "
+            "circles grow and turn red as places get hit harder, then the stages below explain "
+            "each moment in plain language."
+        )
+        st.plotly_chart(build_animation(features_by_t, metric), use_container_width=True)
+
+        for i, res in enumerate(results):
+            st.markdown(f"#### Stage {i + 1} (Timestep {res['timestep']})")
+            st.markdown(plain_language_stage(res))
+        with st.expander("\U0001f4d6 What do these terms mean? (Plain-language glossary)"):
+            for term, meaning in GLOSSARY.items():
+                st.markdown(f"- **{term}**: {meaning}")
+
     if results:
         st.subheader("Timestep Viewer")
         for res in results:
@@ -211,7 +299,7 @@ def main():
         st.subheader("The Butterfly Effect")
         st.markdown(
             "\n\n".join(
-                build_final_story(results, st.session_state["initial_event"]).split("\n")
+                build_final_story(results, sim["initial_event"]).split("\n")
             )
         )
     else:

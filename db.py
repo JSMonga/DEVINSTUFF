@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sqlite3
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "chaos_weather.db")
@@ -66,6 +67,17 @@ CREATE TABLE IF NOT EXISTS events (
     severity REAL DEFAULT 1.0,
     description TEXT,
     FOREIGN KEY (node_id) REFERENCES nodes(node_id)
+);
+
+CREATE TABLE IF NOT EXISTS simulations (
+    sim_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    initial_event TEXT,
+    chaos_level REAL,
+    steps INTEGER,
+    results TEXT,
+    features_by_timestep TEXT
 );
 """
 
@@ -202,6 +214,104 @@ def get_latent_states() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM latent_states ORDER BY timestep, id").fetchall()
     return [dict(r) for r in rows]
+
+
+def dump_simulations() -> list[tuple]:
+    """Raw rows of the simulations table, for preserving across a reseed."""
+    if not os.path.exists(DB_PATH):
+        return []
+    with get_connection() as conn:
+        try:
+            return conn.execute(
+                "SELECT sim_id, name, created_at, initial_event, chaos_level, steps, results, features_by_timestep FROM simulations"
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+
+def restore_simulations(rows: list[tuple]) -> None:
+    with get_connection() as conn:
+        conn.executescript(SCHEMA)
+        conn.executemany(
+            """INSERT OR REPLACE INTO simulations
+               (sim_id, name, created_at, initial_event, chaos_level, steps, results, features_by_timestep)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [tuple(r) for r in rows],
+        )
+
+
+def ensure_simulations_table() -> None:
+    """Add the simulations table to databases seeded before it existed."""
+    with get_connection() as conn:
+        conn.executescript(SCHEMA)
+
+
+def create_simulation(name: str) -> int:
+    with get_connection() as conn:
+        cur = conn.execute("INSERT INTO simulations (name) VALUES (?)", (name,))
+        return cur.lastrowid
+
+
+def list_simulations() -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT sim_id, name, created_at, initial_event, chaos_level, steps FROM simulations ORDER BY sim_id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def rename_simulation(sim_id: int, name: str) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE simulations SET name = ? WHERE sim_id = ?", (name, sim_id))
+
+
+def next_simulation_name() -> str:
+    """Standard nomenclature: Simulation n, for n = latest integer."""
+    highest = 0
+    for sim in list_simulations():
+        match = re.fullmatch(r"Simulation (\d+)", sim["name"])
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"Simulation {highest + 1}"
+
+
+def save_simulation_run(
+    sim_id: int,
+    initial_event: dict,
+    chaos_level: float,
+    steps: int,
+    results: list[dict],
+    features_by_timestep: dict,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """UPDATE simulations
+               SET initial_event = ?, chaos_level = ?, steps = ?, results = ?, features_by_timestep = ?
+               WHERE sim_id = ?""",
+            (
+                json.dumps(initial_event),
+                chaos_level,
+                steps,
+                json.dumps(results),
+                json.dumps({str(k): v for k, v in features_by_timestep.items()}),
+                sim_id,
+            ),
+        )
+
+
+def get_simulation(sim_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM simulations WHERE sim_id = ?", (sim_id,)).fetchone()
+    if not row:
+        return None
+    sim = dict(row)
+    sim["initial_event"] = json.loads(sim["initial_event"]) if sim["initial_event"] else None
+    sim["results"] = json.loads(sim["results"]) if sim["results"] else None
+    if sim["features_by_timestep"]:
+        sim["features_by_timestep"] = {
+            int(k): v for k, v in json.loads(sim["features_by_timestep"]).items()
+        }
+    return sim
 
 
 def get_max_timestep() -> int:

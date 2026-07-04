@@ -41,6 +41,12 @@ With a live LLM:
 
 If no key is set (or a call fails), the client falls back to mock responses so the demo still works offline — shocks and mock adjustments remain random. Set `MOCK_LLM=true` to force offline mode.
 
+## Simulations & Story Mode
+
+- Every run is saved to SQLite under a named simulation, so results survive restarts.
+- The sidebar menu lists all simulations: ➕ creates a new one ("Simulation n"), ◀ hides the menu (a ☰ Show menu button appears top right), and each simulation can be renamed.
+- Story Mode plays an animated map of the whole event chain — nodes grow and recolor as each timestep transitions smoothly into the next — with a plain-language description of every stage and a glossary that explains the jargon.
+
 ## Demo Script
 
 > Most LLM demos just ask a model to write a story. We wanted the chaos to have structure.
