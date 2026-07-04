@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 DEFAULT_MODELS = {
-    "gemini": "gemini-2.0-flash-lite",
+    "gemini": "gemini-3.1-flash-lite",
     "openai": "gpt-4o-mini",
     "anthropic": "claude-3-5-haiku-latest",
     "openrouter": "openai/gpt-4o-mini",
